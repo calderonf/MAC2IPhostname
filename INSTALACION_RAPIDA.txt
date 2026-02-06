@@ -1,190 +1,37 @@
-═══════════════════════════════════════════════════════════════
-  INSTALACIÓN RÁPIDA - ACTUALIZADOR DE IP PARA CÁMARA REOLINK
-═══════════════════════════════════════════════════════════════
+INSTALACION RAPIDA - MAC2IP hostname
+====================================
 
-📋 TU CONFIGURACIÓN:
-   MAC: ec:71:db:34:c6:2f
-   Hostname: thecornercancha1.local
-   Red: 192.168.0.0/24
+1) Descargar el repo y entrar al directorio.
 
-───────────────────────────────────────────────────────────────
-🚀 OPCIÓN 1: INSTALACIÓN AUTOMÁTICA (Recomendada)
-───────────────────────────────────────────────────────────────
+2) Dar permisos de ejecucion:
+   chmod +x actualizar_ip_camara.sh instalar_actualizador.sh test_manual.sh
 
-# Paso 1: Hacer ejecutables los scripts
-chmod +x actualizar_ip_camara.sh instalar_actualizador.sh
+3) Ejecutar instalador interactivo:
+   sudo bash instalar_actualizador.sh
 
-# Paso 2: Instalar (pedirá sudo)
-sudo bash instalar_actualizador.sh
+El instalador solo te pedira:
+- MAC objetivo
+- Alias/hostname
+- Y o N para ejecutar al reinicio con delay
+- Hora diaria en formato HHMM (4 digitos)
 
-# ¡LISTO! Ya está funcionando automáticamente
+Ejemplos de hora:
+- 0300 = 3:00 AM
+- 1550 = 3:50 PM
+- 0010 = 12:10 AM
 
-───────────────────────────────────────────────────────────────
-🧪 OPCIÓN 2: PROBAR PRIMERO (Recomendado para verificar)
-───────────────────────────────────────────────────────────────
+Despues de instalar:
+- Script: /usr/local/bin/actualizar_ip_camara.sh
+- Config: /etc/mac2ip_hostname.conf
+- Log: /var/log/mac2ip_hostname.log
 
-# Paso 1: Hacer ejecutable el test
-chmod +x test_manual.sh
+Comandos utiles:
+- Ejecutar manual: sudo /usr/local/bin/actualizar_ip_camara.sh
+- Ver tareas: sudo crontab -l
+- Ver log: tail -f /var/log/mac2ip_hostname.log
+- Test rapido: sudo bash test_manual.sh
 
-# Paso 2: Ejecutar test
-sudo bash test_manual.sh
-
-# Si el test funciona, instala con la Opción 1
-
-───────────────────────────────────────────────────────────────
-⚙️ OPCIÓN 3: INSTALACIÓN MANUAL (Paso a paso)
-───────────────────────────────────────────────────────────────
-
-# 1. Copiar script al sistema
-sudo cp actualizar_ip_camara.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/actualizar_ip_camara.sh
-
-# 2. Probar que funciona
-sudo /usr/local/bin/actualizar_ip_camara.sh
-
-# 3. Añadir a crontab (abre el editor)
-sudo crontab -e
-
-# 4. Pegar estas líneas al final del archivo:
-
-@reboot sleep 120 && /usr/local/bin/actualizar_ip_camara.sh
-0 3 * * * /usr/local/bin/actualizar_ip_camara.sh
-
-# 5. Guardar y salir (Ctrl+O, Enter, Ctrl+X en nano)
-
-───────────────────────────────────────────────────────────────
-🔍 COMANDOS ÚTILES DESPUÉS DE INSTALAR
-───────────────────────────────────────────────────────────────
-
-# Ver log en tiempo real
-tail -f /var/log/camera_ip_update.log
-
-# Ejecutar manualmente
-sudo /usr/local/bin/actualizar_ip_camara.sh
-
-# Ver crontab
-sudo crontab -l
-
-# Probar conexión
-ping thecornercancha1.local
-
-# Probar RTSP
-ffprobe -rtsp_transport tcp "rtsp://admin:Pi.1415926535@thecornercancha1.local:554/h264Preview_01_main"
-
-# O con VLC
-vlc "rtsp://admin:Pi.1415926535@thecornercancha1.local:554/h264Preview_01_main"
-
-───────────────────────────────────────────────────────────────
-🔧 PERSONALIZACIÓN
-───────────────────────────────────────────────────────────────
-
-Si tu red NO es 192.168.0.x, edita el script:
-
-sudo nano /usr/local/bin/actualizar_ip_camara.sh
-
-Busca esta línea:
-   NETWORK_RANGE="192.168.0.0/24"
-
-Cámbiala según tu red:
-   192.168.1.x → NETWORK_RANGE="192.168.1.0/24"
-   10.0.0.x    → NETWORK_RANGE="10.0.0.0/24"
-   172.16.0.x  → NETWORK_RANGE="172.16.0.0/24"
-
-───────────────────────────────────────────────────────────────
-📅 PROGRAMACIÓN (Crontab explicado)
-───────────────────────────────────────────────────────────────
-
-Por defecto se ejecuta:
-  • Al reiniciar (después de 2 minutos)
-  • Diariamente a las 3:00 AM
-
-Otras opciones útiles (añade a crontab):
-
-# Cada 6 horas
-0 */6 * * * /usr/local/bin/actualizar_ip_camara.sh
-
-# Cada hora
-0 * * * * /usr/local/bin/actualizar_ip_camara.sh
-
-# Cada 30 minutos
-*/30 * * * * /usr/local/bin/actualizar_ip_camara.sh
-
-───────────────────────────────────────────────────────────────
-✅ VERIFICACIÓN POST-INSTALACIÓN
-───────────────────────────────────────────────────────────────
-
-# 1. Ver que el script se ejecutó
-tail /var/log/camera_ip_update.log
-
-# 2. Ver que está en /etc/hosts
-cat /etc/hosts | grep thecornercancha1
-
-# 3. Probar conectividad
-ping -c 3 thecornercancha1.local
-
-# 4. Ver crontab activo
-sudo crontab -l
-
-# Si todo muestra OK, ¡ya está funcionando! 🎉
-
-───────────────────────────────────────────────────────────────
-❌ DESINSTALACIÓN
-───────────────────────────────────────────────────────────────
-
-# 1. Eliminar de crontab
-sudo crontab -e
-# (Elimina las líneas del actualizador y guarda)
-
-# 2. Eliminar archivos
-sudo rm /usr/local/bin/actualizar_ip_camara.sh
-sudo rm /var/log/camera_ip_update.log
-
-# 3. Limpiar /etc/hosts (opcional)
-sudo nano /etc/hosts
-# (Elimina la línea de thecornercancha1.local)
-
-───────────────────────────────────────────────────────────────
-🆘 SOLUCIÓN DE PROBLEMAS
-───────────────────────────────────────────────────────────────
-
-Problema: "No se pudo encontrar la cámara"
-  → Verifica que esté encendida: ping 192.168.0.231
-  → Verifica la MAC: arp -a | grep -i ec:71:db
-
-Problema: "Permission denied"
-  → Ejecuta con sudo: sudo bash actualizar_ip_camara.sh
-
-Problema: No se ejecuta automáticamente
-  → Verifica cron: sudo systemctl status cron
-  → Verifica crontab: sudo crontab -l
-
-Problema: /etc/hosts no se actualiza
-  → Verifica permisos: ls -la /etc/hosts
-  → Debe ser: -rw-r--r-- root root
-
-───────────────────────────────────────────────────────────────
-💡 CÓDIGO PYTHON DE EJEMPLO PARA USAR EL HOSTNAME
-───────────────────────────────────────────────────────────────
-
-import cv2
-
-# Ahora puedes usar el hostname en vez de la IP
-rtsp_url = "rtsp://admin:Pi.1415926535@thecornercancha1.local:554/h264Preview_01_main"
-
-cap = cv2.VideoCapture(rtsp_url)
-
-if cap.isOpened():
-    print("✓ Conexión exitosa a la cámara")
-    ret, frame = cap.read()
-    if ret:
-        print(f"✓ Frame capturado: {frame.shape}")
-else:
-    print("✗ No se pudo conectar")
-
-cap.release()
-
-───────────────────────────────────────────────────────────────
-
-📖 Para más información, lee: guia_uso_actualizador.md
-
-¡Listo para usar! 🎉
+Regla de seguridad de crontab:
+- No borra tareas existentes.
+- Agrega su bloque al final si no existe.
+- Si detecta configuracion previa diferente, alerta y no forza cambios.

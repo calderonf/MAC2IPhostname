@@ -2,14 +2,21 @@
 
 # Actualiza /etc/hosts buscando dispositivos por su MAC.
 # Soporta multiples dispositivos (array DEVICES) y formato legacy (TARGET_MAC/TARGET_ALIAS).
+# Detecta cloud-init y actualiza su template para persistir entre reinicios.
 # Configuracion esperada en /etc/mac2ip_hostname.conf
 
 set -u
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/mac2ip_hostname.conf}"
 DEFAULT_LOG_FILE="/var/log/mac2ip_hostname.log"
+CLOUD_INIT_TEMPLATE="/etc/cloud/templates/hosts.debian.tmpl"
+CLOUD_INIT_BEGIN="# BEGIN MAC2IP_HOSTNAME"
+CLOUD_INIT_END="# END MAC2IP_HOSTNAME"
 
 DEVICE_LIST=()
+
+# Almacena "alias ip" de cada dispositivo resuelto para actualizar template cloud-init
+RESOLVED_ENTRIES=()
 
 log() {
     local msg="$1"
@@ -87,22 +94,65 @@ find_ip_by_mac() {
 
 scan_network() {
     local range="$1"
-    local base
+    local max_rounds="${2:-2}"
+    local base batch_size=50
 
     base="$(echo "$range" | cut -d'/' -f1 | cut -d'.' -f1-3)"
 
-    log "Escaneando red $range para poblar ARP..."
+    local round=1
+    while [ "$round" -le "$max_rounds" ]; do
+        log "Escaneando red $range (ronda $round/$max_rounds, orden aleatorio)..."
 
-    for i in {1..254}; do
-        ping -c 1 -W 1 "$base.$i" >/dev/null 2>&1 &
+        # Generar lista aleatorizada de IPs
+        local ip_list
+        if command -v shuf >/dev/null 2>&1; then
+            ip_list="$(shuf -i 1-254)"
+        else
+            ip_list="$(seq 1 254)"
+            log "AVISO: shuf no disponible, escaneo secuencial"
+        fi
+
+        # Enviar pings en lotes para no saturar la red
+        local count=0
+        for i in $ip_list; do
+            ping -c 1 -W 1 "$base.$i" >/dev/null 2>&1 &
+            count=$((count + 1))
+            if [ $((count % batch_size)) -eq 0 ]; then
+                wait
+                sleep 1
+            fi
+        done
+        wait
+        sleep 2
+
+        # Verificar si todos los dispositivos ya fueron encontrados
+        local all_found=1
+        for entry in "${DEVICE_LIST[@]}"; do
+            local mac
+            mac="$(echo "$entry" | awk '{print $1}')"
+            if [ -z "$(find_ip_by_mac "$mac")" ]; then
+                all_found=0
+                break
+            fi
+        done
+
+        if [ "$all_found" -eq 1 ]; then
+            log "Todos los dispositivos encontrados en ronda $round"
+            return 0
+        fi
+
+        round=$((round + 1))
+
+        if [ "$round" -le "$max_rounds" ]; then
+            log "Dispositivos pendientes, reintentando..."
+            sleep 3
+        fi
     done
-    wait
-
-    sleep 2
 }
 
-remove_alias_from_hosts() {
+remove_alias_from_file() {
     local alias="$1"
+    local target_file="$2"
     local tmp_file
 
     tmp_file="$(mktemp)"
@@ -125,9 +175,9 @@ remove_alias_from_hosts() {
         if (keep) {
             print
         }
-    }' /etc/hosts > "$tmp_file"
+    }' "$target_file" > "$tmp_file"
 
-    cat "$tmp_file" > /etc/hosts
+    cat "$tmp_file" > "$target_file"
     rm -f "$tmp_file"
 }
 
@@ -142,11 +192,68 @@ update_hosts_file() {
 
     cp /etc/hosts "/etc/hosts.backup.$(date +%Y%m%d_%H%M%S)"
 
-    remove_alias_from_hosts "$alias"
+    remove_alias_from_file "$alias" /etc/hosts
     echo "$ip    $alias" >> /etc/hosts
 
     log "OK: /etc/hosts actualizado: $ip -> $alias"
 }
+
+# --- cloud-init ---
+
+is_cloud_init_managing_hosts() {
+    # Detectar si cloud-init gestiona /etc/hosts
+    if [ -f "$CLOUD_INIT_TEMPLATE" ]; then
+        # Verificar en cloud.cfg si manage_etc_hosts esta activo
+        if [ -f /etc/cloud/cloud.cfg ]; then
+            if grep -Eq '^\s*manage_etc_hosts\s*:\s*(True|true)' /etc/cloud/cloud.cfg; then
+                return 0
+            fi
+        fi
+        # Tambien verificar por el comentario en /etc/hosts
+        if grep -q "manage_etc_hosts.*True" /etc/hosts 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+update_cloud_init_template() {
+    # Actualiza el template de cloud-init con un bloque gestionado
+    # que contiene todas las entradas resueltas.
+    # Asi al reiniciar, cloud-init regenera /etc/hosts incluyendo nuestras entradas.
+
+    if [ "${#RESOLVED_ENTRIES[@]}" -eq 0 ]; then
+        return
+    fi
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+
+    # Copiar template sin nuestro bloque gestionado previo
+    awk -v begin="$CLOUD_INIT_BEGIN" -v end="$CLOUD_INIT_END" '
+    $0 == begin {skip = 1; next}
+    $0 == end {skip = 0; next}
+    !skip {print}
+    ' "$CLOUD_INIT_TEMPLATE" > "$tmp_file"
+
+    # Agregar bloque gestionado al final
+    {
+        echo ""
+        echo "$CLOUD_INIT_BEGIN"
+        for line in "${RESOLVED_ENTRIES[@]}"; do
+            echo "$line"
+        done
+        echo "$CLOUD_INIT_END"
+    } >> "$tmp_file"
+
+    cp "$CLOUD_INIT_TEMPLATE" "${CLOUD_INIT_TEMPLATE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cat "$tmp_file" > "$CLOUD_INIT_TEMPLATE"
+    rm -f "$tmp_file"
+
+    log "OK: Template cloud-init actualizado ($CLOUD_INIT_TEMPLATE)"
+}
+
+# --- procesamiento ---
 
 process_device() {
     local mac="$1"
@@ -166,6 +273,9 @@ process_device() {
 
     log "OK: Dispositivo encontrado en IP $current_ip"
     update_hosts_file "$current_ip" "$alias"
+
+    # Guardar entrada resuelta para cloud-init
+    RESOLVED_ENTRIES+=("$current_ip    $alias")
 
     if ping -c 1 -W 2 "$alias" >/dev/null 2>&1; then
         log "OK: Verificacion por hostname exitosa ($alias)"
@@ -190,12 +300,19 @@ main() {
     log "Dispositivos configurados: ${#DEVICE_LIST[@]}"
     log "Rango de escaneo: $NETWORK_RANGE"
 
+    # Detectar cloud-init
+    local cloud_init_active=0
+    if is_cloud_init_managing_hosts; then
+        cloud_init_active=1
+        log "AVISO: cloud-init gestiona /etc/hosts (manage_etc_hosts=True)"
+        log "Se actualizara tambien el template: $CLOUD_INIT_TEMPLATE"
+    fi
+
     # Primer intento: buscar todas las MACs en ARP actual
     local need_scan=0
     for entry in "${DEVICE_LIST[@]}"; do
-        local mac alias
+        local mac
         mac="$(echo "$entry" | awk '{print $1}')"
-        alias="$(echo "$entry" | awk '{print $2}')"
         local ip
         ip="$(find_ip_by_mac "$mac")"
         if [ -z "$ip" ]; then
@@ -204,10 +321,10 @@ main() {
         fi
     done
 
-    # Escanear red una sola vez si al menos un dispositivo no se encontro
+    # Escanear red (con reintentos) si al menos un dispositivo no se encontro
     if [ "$need_scan" -eq 1 ]; then
         log "Al menos un dispositivo no encontrado en ARP, iniciando escaneo"
-        scan_network "$NETWORK_RANGE"
+        scan_network "$NETWORK_RANGE" 2
     fi
 
     # Procesar cada dispositivo
@@ -220,6 +337,11 @@ main() {
             errors=$((errors + 1))
         fi
     done
+
+    # Actualizar template cloud-init si aplica
+    if [ "$cloud_init_active" -eq 1 ]; then
+        update_cloud_init_template
+    fi
 
     log "========================================="
     if [ "$errors" -gt 0 ]; then

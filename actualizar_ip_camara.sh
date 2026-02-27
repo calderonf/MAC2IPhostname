@@ -1,12 +1,15 @@
 #!/bin/bash
 
-# Actualiza /etc/hosts buscando un dispositivo por su MAC.
+# Actualiza /etc/hosts buscando dispositivos por su MAC.
+# Soporta multiples dispositivos (array DEVICES) y formato legacy (TARGET_MAC/TARGET_ALIAS).
 # Configuracion esperada en /etc/mac2ip_hostname.conf
 
 set -u
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/mac2ip_hostname.conf}"
 DEFAULT_LOG_FILE="/var/log/mac2ip_hostname.log"
+
+DEVICE_LIST=()
 
 log() {
     local msg="$1"
@@ -33,8 +36,12 @@ validate_config() {
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 
-    if [ -z "${TARGET_MAC:-}" ] || [ -z "${TARGET_ALIAS:-}" ]; then
-        echo "ERROR: TARGET_MAC y TARGET_ALIAS son obligatorios en $CONFIG_FILE"
+    if [ -n "${DEVICES+x}" ] && [ "${#DEVICES[@]}" -gt 0 ]; then
+        DEVICE_LIST=("${DEVICES[@]}")
+    elif [ -n "${TARGET_MAC:-}" ] && [ -n "${TARGET_ALIAS:-}" ]; then
+        DEVICE_LIST=("$TARGET_MAC $TARGET_ALIAS")
+    else
+        echo "ERROR: Se requiere array DEVICES o TARGET_MAC/TARGET_ALIAS en $CONFIG_FILE"
         exit 1
     fi
 
@@ -141,6 +148,34 @@ update_hosts_file() {
     log "OK: /etc/hosts actualizado: $ip -> $alias"
 }
 
+process_device() {
+    local mac="$1"
+    local alias="$2"
+
+    log "-----------------------------------------"
+    log "Procesando dispositivo: $alias (MAC: $mac)"
+
+    local current_ip
+    current_ip="$(find_ip_by_mac "$mac")"
+
+    if [ -z "$current_ip" ]; then
+        log "ERROR: No se encontro dispositivo con MAC $mac ($alias)"
+        log "Verifica que el equipo este encendido y conectado"
+        return 1
+    fi
+
+    log "OK: Dispositivo encontrado en IP $current_ip"
+    update_hosts_file "$current_ip" "$alias"
+
+    if ping -c 1 -W 2 "$alias" >/dev/null 2>&1; then
+        log "OK: Verificacion por hostname exitosa ($alias)"
+    else
+        log "AVISO: $alias no respondio a ping (hosts ya fue actualizado)"
+    fi
+
+    return 0
+}
+
 main() {
     if [ "$EUID" -ne 0 ]; then
         echo "ERROR: Este script requiere permisos de root."
@@ -152,37 +187,47 @@ main() {
 
     log "========================================="
     log "Inicio de actualizacion MAC -> hostname"
-    log "MAC objetivo: $TARGET_MAC"
-    log "Alias objetivo: $TARGET_ALIAS"
+    log "Dispositivos configurados: ${#DEVICE_LIST[@]}"
     log "Rango de escaneo: $NETWORK_RANGE"
 
-    local current_ip
-    current_ip="$(find_ip_by_mac "$TARGET_MAC")"
+    # Primer intento: buscar todas las MACs en ARP actual
+    local need_scan=0
+    for entry in "${DEVICE_LIST[@]}"; do
+        local mac alias
+        mac="$(echo "$entry" | awk '{print $1}')"
+        alias="$(echo "$entry" | awk '{print $2}')"
+        local ip
+        ip="$(find_ip_by_mac "$mac")"
+        if [ -z "$ip" ]; then
+            need_scan=1
+            break
+        fi
+    done
 
-    if [ -z "$current_ip" ]; then
-        log "MAC no encontrada en ARP actual, iniciando escaneo"
+    # Escanear red una sola vez si al menos un dispositivo no se encontro
+    if [ "$need_scan" -eq 1 ]; then
+        log "Al menos un dispositivo no encontrado en ARP, iniciando escaneo"
         scan_network "$NETWORK_RANGE"
-        current_ip="$(find_ip_by_mac "$TARGET_MAC")"
     fi
 
-    if [ -z "$current_ip" ]; then
-        log "ERROR: No se encontro dispositivo con MAC $TARGET_MAC"
-        log "Verifica que el equipo este encendido y conectado"
-        log "Fin con error"
-        log "========================================="
+    # Procesar cada dispositivo
+    local errors=0
+    for entry in "${DEVICE_LIST[@]}"; do
+        local mac alias
+        mac="$(echo "$entry" | awk '{print $1}')"
+        alias="$(echo "$entry" | awk '{print $2}')"
+        if ! process_device "$mac" "$alias"; then
+            errors=$((errors + 1))
+        fi
+    done
+
+    log "========================================="
+    if [ "$errors" -gt 0 ]; then
+        log "Fin con $errors error(es) de ${#DEVICE_LIST[@]} dispositivo(s)"
         exit 1
-    fi
-
-    log "OK: Dispositivo encontrado en IP $current_ip"
-    update_hosts_file "$current_ip" "$TARGET_ALIAS"
-
-    if ping -c 1 -W 2 "$TARGET_ALIAS" >/dev/null 2>&1; then
-        log "OK: Verificacion por hostname exitosa ($TARGET_ALIAS)"
     else
-        log "AVISO: $TARGET_ALIAS no respondio a ping (hosts ya fue actualizado)"
+        log "Fin: ${#DEVICE_LIST[@]} dispositivo(s) procesado(s) correctamente"
     fi
-
-    log "Fin"
     log "========================================="
 }
 

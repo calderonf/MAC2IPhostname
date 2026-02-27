@@ -11,6 +11,9 @@ REBOOT_DELAY_SECONDS=120
 CRON_BEGIN="# BEGIN MAC2IP_HOSTNAME"
 CRON_END="# END MAC2IP_HOSTNAME"
 
+# Array de dispositivos a escribir en config
+DEVICES_TO_WRITE=()
+
 normalize_mac() {
     local raw
     raw="$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:xdigit:]')"
@@ -30,7 +33,7 @@ prompt_mac() {
         normalized="$(normalize_mac "$input")"
 
         if [ -n "$normalized" ]; then
-            TARGET_MAC="$normalized"
+            NEW_MAC="$normalized"
             return
         fi
 
@@ -44,7 +47,7 @@ prompt_alias() {
         read -r -p "Alias/hostname (ej: camara-patio.local): " input
 
         if [[ "$input" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
-            TARGET_ALIAS="$input"
+            NEW_ALIAS="$input"
             return
         fi
 
@@ -165,14 +168,18 @@ configure_crontab() {
 }
 
 write_config_file() {
-    cat > "$CONFIG_FILE" <<EOF_CONF
-# Archivo de configuracion generado por instalar_actualizador.sh
-TARGET_MAC="$TARGET_MAC"
-TARGET_ALIAS="$TARGET_ALIAS"
-# Deja vacio para deteccion automatica de /24 en la interfaz principal.
-NETWORK_RANGE=""
-LOG_FILE="$LOG_FILE"
-EOF_CONF
+    {
+        echo "# Archivo de configuracion generado por instalar_actualizador.sh"
+        echo "# Formato: \"MAC ALIAS\" por dispositivo"
+        echo "DEVICES=("
+        for entry in "${DEVICES_TO_WRITE[@]}"; do
+            echo "  \"$entry\""
+        done
+        echo ")"
+        echo "# Deja vacio para deteccion automatica de /24 en la interfaz principal."
+        echo "NETWORK_RANGE=\"\""
+        echo "LOG_FILE=\"$LOG_FILE\""
+    } > "$CONFIG_FILE"
 
     chmod 600 "$CONFIG_FILE"
 }
@@ -187,6 +194,61 @@ install_script() {
     chmod +x "$SCRIPT_PATH"
 }
 
+load_existing_devices() {
+    # Lee config existente y carga dispositivos en DEVICES_TO_WRITE
+    DEVICES_TO_WRITE=()
+
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+
+    if [ -n "${DEVICES+x}" ] && [ "${#DEVICES[@]}" -gt 0 ]; then
+        DEVICES_TO_WRITE=("${DEVICES[@]}")
+    elif [ -n "${TARGET_MAC:-}" ] && [ -n "${TARGET_ALIAS:-}" ]; then
+        DEVICES_TO_WRITE=("$TARGET_MAC $TARGET_ALIAS")
+    fi
+
+    # Limpiar variables importadas para no interferir
+    unset DEVICES TARGET_MAC TARGET_ALIAS NETWORK_RANGE 2>/dev/null || true
+}
+
+show_existing_devices() {
+    echo ""
+    echo "Dispositivos configurados actualmente:"
+    local i=1
+    for entry in "${DEVICES_TO_WRITE[@]}"; do
+        local mac alias
+        mac="$(echo "$entry" | awk '{print $1}')"
+        alias="$(echo "$entry" | awk '{print $2}')"
+        echo "  $i) $alias  (MAC: $mac)"
+        i=$((i + 1))
+    done
+    echo ""
+}
+
+check_duplicate() {
+    local new_mac="$1"
+    local new_alias="$2"
+    local norm_new
+    norm_new="$(echo "$new_mac" | tr '[:upper:]' '[:lower:]' | tr -cd '[:xdigit:]')"
+
+    for entry in "${DEVICES_TO_WRITE[@]}"; do
+        local mac alias norm_existing
+        mac="$(echo "$entry" | awk '{print $1}')"
+        alias="$(echo "$entry" | awk '{print $2}')"
+        norm_existing="$(echo "$mac" | tr '[:upper:]' '[:lower:]' | tr -cd '[:xdigit:]')"
+
+        if [ "$norm_existing" = "$norm_new" ]; then
+            echo "ERROR: La MAC $new_mac ya esta configurada como $alias."
+            return 1
+        fi
+        if [ "$alias" = "$new_alias" ]; then
+            echo "ERROR: El alias $new_alias ya esta en uso para MAC $mac."
+            return 1
+        fi
+    done
+    return 0
+}
+
 main() {
     if [ "$EUID" -ne 0 ]; then
         echo "Este script necesita ejecutarse con sudo/root."
@@ -198,10 +260,52 @@ main() {
     echo "CONFIGURACION MAC -> HOSTNAME"
     echo "========================================="
 
+    local adding_to_existing=0
+
+    if [ -f "$CONFIG_FILE" ]; then
+        load_existing_devices
+
+        if [ "${#DEVICES_TO_WRITE[@]}" -gt 0 ]; then
+            show_existing_devices
+
+            local input
+            while true; do
+                read -r -p "Deseas agregar un nuevo dispositivo? (Y/N): " input
+                input="$(echo "$input" | tr '[:lower:]' '[:upper:]')"
+                if [ "$input" = "Y" ] || [ "$input" = "N" ]; then
+                    break
+                fi
+                echo "Respuesta invalida. Escribe Y o N."
+            done
+
+            if [ "$input" = "N" ]; then
+                echo "No se realizaron cambios."
+                exit 0
+            fi
+
+            adding_to_existing=1
+        fi
+    fi
+
+    # Pedir MAC y alias del nuevo dispositivo
     prompt_mac
     prompt_alias
-    prompt_reboot_option
-    prompt_daily_time
+
+    # Validar que no sea duplicado
+    if [ "${#DEVICES_TO_WRITE[@]}" -gt 0 ]; then
+        if ! check_duplicate "$NEW_MAC" "$NEW_ALIAS"; then
+            exit 1
+        fi
+    fi
+
+    # Agregar nuevo dispositivo al array
+    DEVICES_TO_WRITE+=("$NEW_MAC $NEW_ALIAS")
+
+    # Solo pedir cron si es primera instalacion
+    if [ "$adding_to_existing" -eq 0 ]; then
+        prompt_reboot_option
+        prompt_daily_time
+    fi
 
     echo ""
     echo "Instalando en $SCRIPT_PATH ..."
@@ -213,11 +317,15 @@ main() {
     touch "$LOG_FILE"
     chmod 644 "$LOG_FILE"
 
-    build_desired_cron_block
-
-    echo "Configurando crontab..."
-    configure_crontab
-    cron_status=$?
+    local cron_status=0
+    if [ "$adding_to_existing" -eq 0 ]; then
+        build_desired_cron_block
+        echo "Configurando crontab..."
+        configure_crontab
+        cron_status=$?
+    else
+        echo "Crontab ya configurado, sin cambios."
+    fi
 
     echo ""
     echo "Ejecutando una prueba inicial..."
@@ -235,16 +343,29 @@ main() {
     echo "Config: $CONFIG_FILE"
     echo "Log: $LOG_FILE"
     echo ""
-    echo "Configuracion aplicada:"
-    echo "  MAC: $TARGET_MAC"
-    echo "  Alias: $TARGET_ALIAS"
-    echo "  Diario: $DAILY_HOUR:$DAILY_MINUTE"
-    echo "  En reinicio: $RUN_AT_REBOOT"
+    echo "Dispositivos configurados:"
+    local i=1
+    for entry in "${DEVICES_TO_WRITE[@]}"; do
+        local mac alias
+        mac="$(echo "$entry" | awk '{print $1}')"
+        alias="$(echo "$entry" | awk '{print $2}')"
+        echo "  $i) $alias  (MAC: $mac)"
+        i=$((i + 1))
+    done
     echo ""
+
+    if [ "$adding_to_existing" -eq 0 ]; then
+        echo "Programacion:"
+        echo "  Diario: $DAILY_HOUR:$DAILY_MINUTE"
+        echo "  En reinicio: $RUN_AT_REBOOT"
+        echo ""
+    fi
+
     echo "Comandos utiles:"
     echo "  sudo crontab -l"
     echo "  sudo $SCRIPT_PATH"
     echo "  tail -f $LOG_FILE"
+    echo "  sudo bash instalar_actualizador.sh   (agregar mas dispositivos)"
 
     if [ "$cron_status" -eq 2 ]; then
         echo ""

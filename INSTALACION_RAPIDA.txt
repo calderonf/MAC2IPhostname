@@ -20,6 +20,11 @@ Ejemplos de hora:
 - 1550 = 3:50 PM
 - 0010 = 12:10 AM
 
+Agregar mas camaras/dispositivos:
+- Ejecuta de nuevo: sudo bash instalar_actualizador.sh
+- El instalador detecta la config existente y te permite agregar otro dispositivo.
+- Solo pide MAC y alias; el crontab se mantiene.
+
 Despues de instalar:
 - Script: /usr/local/bin/actualizar_ip_camara.sh
 - Config: /etc/mac2ip_hostname.conf

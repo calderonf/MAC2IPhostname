@@ -1,8 +1,8 @@
 # MAC2IPhostname
 
-Asigna y mantiene actualizado un alias en `/etc/hosts` buscando un dispositivo por su direccion MAC.
+Asigna y mantiene actualizado uno o mas alias en `/etc/hosts` buscando dispositivos por su direccion MAC.
 
-Ideal cuando la IP cambia despues de reinicios del equipo o de la red.
+Ideal cuando la IP cambia despues de reinicios del equipo o de la red. Soporta multiples camaras/dispositivos en una sola instalacion.
 
 ## Requisitos
 
@@ -46,6 +46,16 @@ sudo bash instalar_actualizador.sh
   - Respuesta: `Y` o `N`
 - Hora diaria en formato militar de 4 digitos (`HHMM`)
   - Ejemplos: `0300`, `1550`, `0010`
+
+## Agregar mas dispositivos
+
+Para agregar una segunda camara (o tercera, etc.), ejecuta el instalador de nuevo:
+
+```bash
+sudo bash instalar_actualizador.sh
+```
+
+El instalador detecta la configuracion existente, muestra los dispositivos ya configurados y te permite agregar uno nuevo. Solo te pedira MAC y alias; la programacion de crontab se mantiene sin cambios.
 
 ## Que deja configurado
 
@@ -96,7 +106,18 @@ Ruta:
 /etc/mac2ip_hostname.conf
 ```
 
-Ejemplo:
+Ejemplo con multiples dispositivos:
+
+```bash
+DEVICES=(
+  "ec:71:db:34:c6:2f camara-patio.local"
+  "11:22:33:44:55:66 camara-entrada.local"
+)
+NETWORK_RANGE=""
+LOG_FILE="/var/log/mac2ip_hostname.log"
+```
+
+Formato legacy (un solo dispositivo, sigue siendo compatible):
 
 ```bash
 TARGET_MAC="ec:71:db:34:c6:2f"
@@ -108,6 +129,7 @@ LOG_FILE="/var/log/mac2ip_hostname.log"
 Notas:
 - `NETWORK_RANGE=""` usa deteccion automatica (`/24`) sobre la interfaz principal.
 - Si necesitas fijar la red manualmente, usa por ejemplo `192.168.0.0/24`.
+- El formato legacy se migra automaticamente al agregar un segundo dispositivo con el instalador.
 
 ## Solucion de problemas rapida
 

@@ -95,7 +95,7 @@ find_ip_by_mac() {
 scan_network() {
     local range="$1"
     local max_rounds="${2:-2}"
-    local base batch_size=50
+    local base batch_size=15
 
     base="$(echo "$range" | cut -d'/' -f1 | cut -d'.' -f1-3)"
 
@@ -119,7 +119,7 @@ scan_network() {
             count=$((count + 1))
             if [ $((count % batch_size)) -eq 0 ]; then
                 wait
-                sleep 1
+                sleep 2
             fi
         done
         wait

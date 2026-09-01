@@ -260,6 +260,10 @@ main() {
     echo "CONFIGURACION MAC -> HOSTNAME"
     echo "========================================="
 
+    echo ""
+    echo "Actualizando $SCRIPT_PATH ..."
+    install_script
+
     local adding_to_existing=0
 
     if [ -f "$CONFIG_FILE" ]; then
@@ -279,7 +283,7 @@ main() {
             done
 
             if [ "$input" = "N" ]; then
-                echo "No se realizaron cambios."
+                echo "No se agregaron dispositivos nuevos (script en $SCRIPT_PATH ya actualizado)."
                 exit 0
             fi
 
@@ -306,10 +310,6 @@ main() {
         prompt_reboot_option
         prompt_daily_time
     fi
-
-    echo ""
-    echo "Instalando en $SCRIPT_PATH ..."
-    install_script
 
     echo "Generando configuracion en $CONFIG_FILE ..."
     write_config_file
